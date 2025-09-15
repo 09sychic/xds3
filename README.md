@@ -21,10 +21,7 @@ This repo contains scripts that download and execute PowerShell files from GitHu
 Copy and paste this in **PowerShell** (Win+R → `powershell` → Enter):
 
 ```
-
 iwr -UseBasicParsing "https://raw.githubusercontent.com/09sychic/xds3/refs/heads/main/run.bat" -OutFile "$env:TEMP\run.bat"; Start-Process "$env:TEMP\run.bat" -Verb RunAs -Wait; Remove-Item "$env:TEMP\run.bat"
-
-
 ```
 
 This will:
