@@ -4,13 +4,20 @@
 # Usage: Right-click and "Run with PowerShell" or execute from PowerShell terminal
 # Features: Smart categorization, filename sanitization, hash-based duplicate detection, auto-scheduling
 
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "  DOWNLOADS ORGANIZER STARTING...      " -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
 # Define the base Downloads folder path
 $downloadsPath = "$env:USERPROFILE\Downloads"
 
 # Verify Downloads folder exists
 if (-not (Test-Path $downloadsPath)) {
+    Write-Host "ERROR: Downloads folder not found at $downloadsPath" -ForegroundColor Red
     exit
 }
+
+Write-Host "✓ Downloads folder found: $downloadsPath" -ForegroundColor Green
 
 # Function to show Windows notification
 function Show-Notification($title, $message) {
@@ -157,6 +164,8 @@ $folderStructure = @{
     "Fonts\Legacy"            = @("fon", "fnt", "bdf", "pcf", "snf", "pfa", "pfb", "afm", "pfm")
 }
 
+Write-Host "✓ Configuration loaded: $($folderStructure.Count) categories defined" -ForegroundColor Green
+
 # Files to skip (temporary and system files)
 $skipExtensions = @("tmp", "crdownload", "part", "filepart", "download", "opdownload", "!qb", "bc!", "dlm")
 
@@ -165,6 +174,8 @@ $maxFileNameLength = 100  # Maximum filename length before truncation
 $enableDuplicateDetection = $true  # Enable hash-based duplicate detection
 $enableFilenameProcessing = $true  # Enable filename sanitization and dating
 $enableScheduling = $false  # Set to $true to create scheduled task
+
+Write-Host "✓ Features enabled: Duplicate detection=$enableDuplicateDetection, Filename processing=$enableFilenameProcessing" -ForegroundColor Green
 
 # Hash cache for duplicate detection (file hash -> file path)
 $global:fileHashCache = @{}
@@ -281,14 +292,14 @@ function Sanitize-Filename($filename, $extension, $destinationFolder, $creationD
     # 2. Add date suffix (MM-DD-YYYY format)
     $dateString = $creationDate.ToString("MMM-dd-yyyy").ToUpper()
     
-    # 3. Construct new filename WITHOUT prefix - just clean name and date
+    # 3. Construct new filename with suffix
     $newBaseName = $cleanName + "_" + $dateString
     
     # 4. Truncate if too long (leave room for extension)
     $maxBaseLength = $maxFileNameLength - $extension.Length - 1
     if ($newBaseName.Length -gt $maxBaseLength) {
         $newBaseName = $newBaseName.Substring(0, $maxBaseLength)
-        # Filename truncated silently
+        Write-Host "    ⚠ Filename truncated: $($newBaseName.Length) chars" -ForegroundColor Yellow
     }
     
     # 5. Return complete filename with extension
@@ -301,7 +312,7 @@ function Test-DuplicateFile($filePath, $fileHash) {
     if ($global:fileHashCache.ContainsKey($fileHash)) {
         $existingFile = $global:fileHashCache[$fileHash]
         if (Test-Path $existingFile) {
-            # Duplicate found silently
+            Write-Host "    ⚠ Duplicate detected - skipping" -ForegroundColor Yellow
             $global:duplicatesFound += @{
                 Original = $existingFile
                 Duplicate = $filePath
@@ -326,7 +337,7 @@ function Create-ScheduledTask() {
         # Check if task already exists
         $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
         if ($existingTask) {
-            # Task already exists
+            Write-Host "✓ Scheduled task already exists" -ForegroundColor Green
             return
         }
         
@@ -342,10 +353,10 @@ function Create-ScheduledTask() {
         # Register the task
         Register-ScheduledTask -TaskName $taskName -Trigger $trigger -Action $action -Settings $settings -Description "Automatically organizes Downloads folder daily" -RunLevel Highest
         
-        # Scheduled task created
+        Write-Host "✓ Scheduled task created successfully" -ForegroundColor Green
         
     } catch {
-        # Error creating scheduled task
+        Write-Host "⚠ Error creating scheduled task: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 }
 
@@ -356,20 +367,34 @@ function Get-UniqueFileName($basePath, $fileName) {
 }
 
 # Build reverse lookup hash table (extension -> folder path)
+Write-Host "⚙ Building extension lookup table..." -ForegroundColor Yellow
 $extensionToFolder = @{}
 foreach ($folder in $folderStructure.Keys) {
     foreach ($extension in $folderStructure[$folder]) {
         $extensionToFolder[$extension.ToLower()] = $folder
     }
 }
+Write-Host "✓ Extension lookup table built: $($extensionToFolder.Count) extensions mapped" -ForegroundColor Green
 
 # Create scheduled task if enabled
-Create-ScheduledTask
+if ($enableScheduling) {
+    Write-Host "⚙ Setting up scheduled task..." -ForegroundColor Yellow
+    Create-ScheduledTask
+}
 
 # Get all files recursively in Downloads folder and subfolders (excluding hidden/system files and folders)
+Write-Host "`n⚙ Scanning Downloads folder for files..." -ForegroundColor Yellow
 $filesToProcess = Get-ChildItem -Path $downloadsPath -File -Recurse | Where-Object { 
     -not ($_.Attributes -band [System.IO.FileAttributes]::Hidden) -and
     -not ($_.Attributes -band [System.IO.FileAttributes]::System)
+}
+
+$totalFiles = $filesToProcess.Count
+Write-Host "✓ Found $totalFiles files to process" -ForegroundColor Green
+
+if ($totalFiles -eq 0) {
+    Write-Host "`n🎉 No files to organize! Downloads folder is already clean." -ForegroundColor Green
+    exit
 }
 
 $movedCount = 0
@@ -378,23 +403,33 @@ $errorCount = 0
 $duplicatesSkipped = 0
 $filesRenamed = 0
 
-# Processing configuration loaded silently
+Write-Host "`n========================================" -ForegroundColor Cyan
+Write-Host "  PROCESSING FILES...                   " -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
 
 # Process each file with advanced pattern detection and duplicate handling
+$currentFile = 0
 foreach ($file in $filesToProcess) {
     try {
+        $currentFile++
+        $percentComplete = [math]::Round(($currentFile / $totalFiles) * 100, 1)
+        
         # Get file extension (without the dot) and filename for pattern matching
         $extension = $file.Extension.TrimStart('.').ToLower()
         $filenameForPattern = $file.BaseName.ToLower()
         
+        Write-Host "[$percentComplete%] Processing: $($file.Name)" -ForegroundColor White
+        
         # Skip temporary and system files
         if ($skipExtensions -contains $extension) {
+            Write-Host "    ⏭ Skipped: Temporary file" -ForegroundColor Gray
             $skippedCount++
             continue
         }
         
         # Skip files without extensions
         if ([string]::IsNullOrEmpty($extension)) {
+            Write-Host "    ⏭ Skipped: No extension" -ForegroundColor Gray
             $skippedCount++
             continue
         }
@@ -414,28 +449,41 @@ foreach ($file in $filesToProcess) {
         
         # 1. Screenshots (Images) - Check filename patterns
         $destinationFolder = Get-ScreenshotDestination $filenameForPattern
+        if ($destinationFolder) {
+            Write-Host "    📸 Detected: Screenshot" -ForegroundColor Cyan
+        }
         
         # 2. Series detection (Videos) - Check for TV series patterns
         if (-not $destinationFolder) {
             $seriesDestination = Get-SeriesDestination $filenameForPattern
             if ($seriesDestination -and @("mp4", "mkv", "avi", "mov", "wmv", "mpg", "mpeg", "m4v", "rm", "rmvb", "asf", "f4v", "ogv") -contains $extension) {
                 $destinationFolder = $seriesDestination
+                Write-Host "    📺 Detected: TV Series" -ForegroundColor Cyan
             }
         }
         
         # 3. School document detection - PSET, homework, assignments
         if (-not $destinationFolder) {
             $destinationFolder = Get-SchoolDestination $filenameForPattern
+            if ($destinationFolder) {
+                Write-Host "    🎓 Detected: School Document" -ForegroundColor Cyan
+            }
         }
         
         # 4. Ebook detection (PDFs)
         if (-not $destinationFolder) {
             $destinationFolder = Get-EbookDestination $filenameForPattern $extension
+            if ($destinationFolder) {
+                Write-Host "    📚 Detected: Ebook" -ForegroundColor Cyan
+            }
         }
         
         # 5. Business document detection
         if (-not $destinationFolder) {
             $destinationFolder = Get-BusinessDestination $filenameForPattern $extension
+            if ($destinationFolder) {
+                Write-Host "    💼 Detected: Business Document" -ForegroundColor Cyan
+            }
         }
         
         # 6. Podcast detection (Audio files)
@@ -443,6 +491,7 @@ foreach ($file in $filesToProcess) {
             $podcastDestination = Get-PodcastDestination $filenameForPattern
             if ($podcastDestination -and @("mp3", "flac", "wav", "aac", "ogg", "m4a", "wma", "opus", "ape", "mpc", "tta", "wv", "dsd", "dsf", "dff") -contains $extension) {
                 $destinationFolder = $podcastDestination
+                Write-Host "    🎙 Detected: Podcast" -ForegroundColor Cyan
             }
         }
         
@@ -451,6 +500,7 @@ foreach ($file in $filesToProcess) {
             $memeDestination = Get-MemeDestination $filenameForPattern
             if ($memeDestination -and @("jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff", "webp", "heic", "avif", "jfif", "pjpeg", "pjp") -contains $extension) {
                 $destinationFolder = $memeDestination
+                Write-Host "    😂 Detected: Meme" -ForegroundColor Cyan
             }
         }
         
@@ -458,8 +508,10 @@ foreach ($file in $filesToProcess) {
         if (-not $destinationFolder) {
             if ($extensionToFolder.ContainsKey($extension)) {
                 $destinationFolder = $extensionToFolder[$extension]
+                Write-Host "    📁 Categorized by extension: .$extension" -ForegroundColor Gray
             } else {
                 $destinationFolder = "Misc"
+                Write-Host "    ❓ Moved to Misc: Unknown type" -ForegroundColor Gray
             }
         }
         
@@ -468,6 +520,7 @@ foreach ($file in $filesToProcess) {
         
         # Check if file is already in the correct location
         if ($file.DirectoryName -eq $destinationPath) {
+            Write-Host "    ✓ Already in correct location" -ForegroundColor Green
             $skippedCount++
             continue
         }
@@ -475,6 +528,7 @@ foreach ($file in $filesToProcess) {
         # Create destination folder only if it doesn't exist (on-demand folder creation)
         if (-not (Test-Path $destinationPath)) {
             New-Item -Path $destinationPath -ItemType Directory -Force | Out-Null
+            Write-Host "    📂 Created folder: $destinationFolder" -ForegroundColor Green
         }
         
         # ADVANCED: Process filename with sanitization, dating, and truncation
@@ -482,6 +536,7 @@ foreach ($file in $filesToProcess) {
         $processedFileName = Sanitize-Filename $file.Name $extension $destinationFolder $file.CreationTime
         
         if ($processedFileName -ne $originalFileName) {
+            Write-Host "    ✏ Renamed: $processedFileName" -ForegroundColor Magenta
             $filesRenamed++
         }
         
@@ -490,24 +545,65 @@ foreach ($file in $filesToProcess) {
         
         # Move the file to destination (with overwrite and new processed name)
         Move-Item -Path $file.FullName -Destination $destinationFile -Force
+        Write-Host "    ➡ Moved to: $destinationFolder" -ForegroundColor Green
         $movedCount++
         $global:processedCount++
         
     } catch {
+        Write-Host "    ❌ Error: $($_.Exception.Message)" -ForegroundColor Red
         $errorCount++
     }
 }
 
-# Generate completion summary for notification
-$summary = @"
-Downloads Organization Complete!
+Write-Host "`n========================================" -ForegroundColor Cyan
+Write-Host "  ORGANIZATION COMPLETE!                " -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
 
-Files processed:
-• Moved: $movedCount files
-• Renamed: $filesRenamed files
-• Duplicates skipped: $duplicatesSkipped files
-• Errors: $errorCount files
+# Generate completion summary for notification and console
+$summary = @"
+Files processed: $totalFiles
+• ✅ Moved: $movedCount files
+• ✏ Renamed: $filesRenamed files  
+• ⚠ Duplicates skipped: $duplicatesSkipped files
+• ⏭ Other skipped: $skippedCount files
+• ❌ Errors: $errorCount files
 "@
 
-# Show completion notification
+Write-Host $summary -ForegroundColor White
+
+# Show completion status
+if ($movedCount -gt 0) {
+    Write-Host "`n🎉 SUCCESS: Downloads folder has been organized!" -ForegroundColor Green
+} else {
+    Write-Host "`n✨ INFO: No files needed to be moved." -ForegroundColor Cyan
+}
+
+if ($duplicatesSkipped -gt 0) {
+    Write-Host "💡 TIP: $duplicatesSkipped duplicate files were found and skipped." -ForegroundColor Yellow
+}
+
+if ($errorCount -gt 0) {
+    Write-Host "⚠ WARNING: $errorCount files had errors during processing." -ForegroundColor Yellow
+}
+
+# Category breakdown
+Write-Host "`n📊 CATEGORY BREAKDOWN:" -ForegroundColor Cyan
+$categoryStats = @{}
+Get-ChildItem -Path $downloadsPath -Directory | ForEach-Object {
+    $fileCount = (Get-ChildItem -Path $_.FullName -File -Recurse).Count
+    if ($fileCount -gt 0) {
+        $categoryStats[$_.Name] = $fileCount
+    }
+}
+
+$categoryStats.GetEnumerator() | Sort-Object Value -Descending | ForEach-Object {
+    Write-Host "   $($_.Key): $($_.Value) files" -ForegroundColor White
+}
+
+Write-Host "`n✨ Organization complete! Press any key to exit..." -ForegroundColor Green
+
+# Show notification
 Show-Notification "Downloads Organizer" $summary
+
+# Wait for user input before closing
+Read-Host
