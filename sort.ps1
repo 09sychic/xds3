@@ -14,7 +14,7 @@ $downloadsPath = "$env:USERPROFILE\Downloads"
 # Verify Downloads folder exists
 if (-not (Test-Path $downloadsPath)) {
     Write-Host "ERROR: Downloads folder not found at $downloadsPath" -ForegroundColor Red
-    exit
+    exit 1
 }
 
 Write-Host "✓ Downloads folder found: $downloadsPath" -ForegroundColor Green
@@ -23,9 +23,10 @@ Write-Host "✓ Downloads folder found: $downloadsPath" -ForegroundColor Green
 function Show-Notification($title, $message) {
     try {
         # Create a Windows toast notification
-        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-        [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-        [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+        Add-Type -AssemblyName Windows.Runtime
+        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+        [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
+        [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null
         
         $template = @"
 <toast>
@@ -273,9 +274,13 @@ function Get-MemeDestination($filename) {
 function Get-FileHash-Fast($filePath) {
     # Fast hash calculation for duplicate detection
     try {
-        $hash = Get-FileHash -Path $filePath -Algorithm MD5
-        return $hash.Hash
+        if (Test-Path $filePath) {
+            $hash = Get-FileHash -Path $filePath -Algorithm MD5 -ErrorAction Stop
+            return $hash.Hash
+        }
+        return $null
     } catch {
+        Write-Warning "Failed to calculate hash for: $filePath"
         return $null
     }
 }
@@ -331,7 +336,7 @@ function Create-ScheduledTask() {
     if (-not $enableScheduling) { return }
     
     try {
-        $scriptPath = $MyInvocation.ScriptName
+        $scriptPath = $PSCommandPath
         $taskName = "Auto-Downloads-Organizer"
         
         # Check if task already exists
@@ -394,7 +399,7 @@ Write-Host "✓ Found $totalFiles files to process" -ForegroundColor Green
 
 if ($totalFiles -eq 0) {
     Write-Host "`n🎉 No files to organize! Downloads folder is already clean." -ForegroundColor Green
-    exit
+    exit 0
 }
 
 $movedCount = 0
@@ -421,7 +426,7 @@ foreach ($file in $filesToProcess) {
         Write-Host "[$percentComplete%] Processing: $($file.Name)" -ForegroundColor White
         
         # Skip temporary and system files
-        if ($skipExtensions -contains $extension) {
+        if ($extension -in $skipExtensions) {
             Write-Host "    ⏭ Skipped: Temporary file" -ForegroundColor Gray
             $skippedCount++
             continue
@@ -456,7 +461,7 @@ foreach ($file in $filesToProcess) {
         # 2. Series detection (Videos) - Check for TV series patterns
         if (-not $destinationFolder) {
             $seriesDestination = Get-SeriesDestination $filenameForPattern
-            if ($seriesDestination -and @("mp4", "mkv", "avi", "mov", "wmv", "mpg", "mpeg", "m4v", "rm", "rmvb", "asf", "f4v", "ogv") -contains $extension) {
+            if ($seriesDestination -and $extension -in @("mp4", "mkv", "avi", "mov", "wmv", "mpg", "mpeg", "m4v", "rm", "rmvb", "asf", "f4v", "ogv")) {
                 $destinationFolder = $seriesDestination
                 Write-Host "    📺 Detected: TV Series" -ForegroundColor Cyan
             }
@@ -489,7 +494,7 @@ foreach ($file in $filesToProcess) {
         # 6. Podcast detection (Audio files)
         if (-not $destinationFolder) {
             $podcastDestination = Get-PodcastDestination $filenameForPattern
-            if ($podcastDestination -and @("mp3", "flac", "wav", "aac", "ogg", "m4a", "wma", "opus", "ape", "mpc", "tta", "wv", "dsd", "dsf", "dff") -contains $extension) {
+            if ($podcastDestination -and $extension -in @("mp3", "flac", "wav", "aac", "ogg", "m4a", "wma", "opus", "ape", "mpc", "tta", "wv", "dsd", "dsf", "dff")) {
                 $destinationFolder = $podcastDestination
                 Write-Host "    🎙 Detected: Podcast" -ForegroundColor Cyan
             }
@@ -498,7 +503,7 @@ foreach ($file in $filesToProcess) {
         # 7. Meme detection (Image files)
         if (-not $destinationFolder) {
             $memeDestination = Get-MemeDestination $filenameForPattern
-            if ($memeDestination -and @("jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff", "webp", "heic", "avif", "jfif", "pjpeg", "pjp") -contains $extension) {
+            if ($memeDestination -and $extension -in @("jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff", "webp", "heic", "avif", "jfif", "pjpeg", "pjp")) {
                 $destinationFolder = $memeDestination
                 Write-Host "    😂 Detected: Meme" -ForegroundColor Cyan
             }
@@ -542,6 +547,13 @@ foreach ($file in $filesToProcess) {
         
         # Handle duplicates by overwriting (no unique filename generation needed)
         $destinationFile = Join-Path $destinationPath $processedFileName
+        
+        # Validate source file still exists before moving
+        if (-not (Test-Path $file.FullName)) {
+            Write-Warning "Source file no longer exists: $($file.FullName)"
+            $errorCount++
+            continue
+        }
         
         # Move the file to destination (with overwrite and new processed name)
         Move-Item -Path $file.FullName -Destination $destinationFile -Force
@@ -607,3 +619,5 @@ Show-Notification "Downloads Organizer" $summary
 
 # Wait for user input before closing
 Read-Host
+
+exit 0
