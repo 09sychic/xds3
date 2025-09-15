@@ -281,28 +281,17 @@ function Sanitize-Filename($filename, $extension, $destinationFolder, $creationD
     # 2. Add date suffix (MM-DD-YYYY format)
     $dateString = $creationDate.ToString("MMM-dd-yyyy").ToUpper()
     
-    # 3. Add category prefix based on destination folder
-    $categoryPrefix = ""
-    if ($destinationFolder) {
-        $parts = $destinationFolder.Split('\')
-        if ($parts.Length -gt 1) {
-            $categoryPrefix = $parts[1].ToUpper() + "_" 
-        } else {
-            $categoryPrefix = $parts[0].ToUpper() + "_"
-        }
-    }
+    # 3. Construct new filename WITHOUT prefix - just clean name and date
+    $newBaseName = $cleanName + "_" + $dateString
     
-    # 4. Construct new filename with prefix and suffix
-    $newBaseName = $categoryPrefix + $cleanName + "_" + $dateString
-    
-    # 5. Truncate if too long (leave room for extension)
+    # 4. Truncate if too long (leave room for extension)
     $maxBaseLength = $maxFileNameLength - $extension.Length - 1
     if ($newBaseName.Length -gt $maxBaseLength) {
         $newBaseName = $newBaseName.Substring(0, $maxBaseLength)
         # Filename truncated silently
     }
     
-    # 6. Return complete filename with extension
+    # 5. Return complete filename with extension
     return $newBaseName + "." + $extension
 }
 
@@ -519,44 +508,6 @@ Files processed:
 • Duplicates skipped: $duplicatesSkipped files
 • Errors: $errorCount files
 "@
-
-# Category prefixes for better visualization
-$categoryPrefixes = @{
-    "Documents" = "[DOC]"
-    "Images" = "[IMG]"
-    "Audio" = "[AUD]"
-    "Video" = "[VID]"
-    "Archives" = "[ARC]"
-    "Programs" = "[PRG]"
-    "Code" = "[COD]"
-    "Games" = "[GAM]"
-    "Development" = "[DEV]"
-    "3D" = "[3D]"
-    "Scientific" = "[SCI]"
-    "Business" = "[BIZ]"
-    "MediaProduction" = "[MED]"
-    "Legacy" = "[LEG]"
-    "System" = "[SYS]"
-    "Torrents" = "[TOR]"
-    "Fonts" = "[FNT]"
-    "Misc" = "[MSC]"
-}
-
-# Create organized view by category
-$categorizedFolders = @{}
-foreach ($folder in $folderStructure.Keys) {
-    $parts = $folder.Split('\')
-    $category = $parts[0]
-    if (-not $categorizedFolders.ContainsKey($category)) {
-        $categorizedFolders[$category] = @()
-    }
-    $categorizedFolders[$category] += $folder
-}
-
-# Add Misc to display
-$categorizedFolders["Misc"] = @("Misc")
-
-# Count organized files silently for notification
 
 # Show completion notification
 Show-Notification "Downloads Organizer" $summary
