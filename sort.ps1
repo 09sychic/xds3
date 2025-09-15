@@ -1,34 +1,111 @@
 # PowerShell Script: sort-downloads.ps1
 # Purpose: ADVANCED Downloads organizer with filename processing, duplicate detection, and scheduling
-# Author: Enhanced Auto-generated
+# Author: Enhanced Auto-generated with Error Handling
 # Usage: Right-click and "Run with PowerShell" or execute from PowerShell terminal
 # Features: Smart categorization, filename sanitization, hash-based duplicate detection, auto-scheduling
 
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  DOWNLOADS ORGANIZER STARTING...      " -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
+# Initialize logging
+$scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+$logFile = Join-Path $scriptPath "downloads-organizer-debug.log"
+$errorLogFile = Join-Path $scriptPath "downloads-organizer-errors.log"
+
+function Write-Log {
+    param(
+        [string]$Message,
+        [string]$Level = "INFO",
+        [switch]$ToConsole = $true
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logEntry = "[$timestamp] [$Level] $Message"
+    
+    # Write to log file
+    try {
+        Add-Content -Path $logFile -Value $logEntry -ErrorAction Stop
+    } catch {
+        Write-Warning "Failed to write to log file: $_"
+    }
+    
+    # Write to console if requested
+    if ($ToConsole) {
+        switch ($Level) {
+            "ERROR" { Write-Host $logEntry -ForegroundColor Red }
+            "WARNING" { Write-Host $logEntry -ForegroundColor Yellow }
+            "SUCCESS" { Write-Host $logEntry -ForegroundColor Green }
+            "INFO" { Write-Host $logEntry -ForegroundColor White }
+            default { Write-Host $logEntry -ForegroundColor Gray }
+        }
+    }
+}
+
+function Write-ErrorLog {
+    param(
+        [string]$ErrorMessage,
+        [string]$Function = "",
+        [string]$File = "",
+        [System.Management.Automation.ErrorRecord]$ErrorRecord = $null
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $errorEntry = "[$timestamp] ERROR in $Function"
+    if ($File) { $errorEntry += " (File: $File)" }
+    $errorEntry += ": $ErrorMessage"
+    
+    if ($ErrorRecord) {
+        $errorEntry += "`nException: $($ErrorRecord.Exception.Message)"
+        $errorEntry += "`nStack Trace: $($ErrorRecord.ScriptStackTrace)"
+    }
+    
+    try {
+        Add-Content -Path $errorLogFile -Value $errorEntry -ErrorAction Stop
+        Add-Content -Path $errorLogFile -Value "----------------------------------------" -ErrorAction Stop
+    } catch {
+        Write-Warning "Failed to write to error log file: $_"
+    }
+    
+    Write-Log $ErrorMessage "ERROR"
+}
+
+# Initialize log files
+try {
+    "=== Downloads Organizer Debug Log - Started $(Get-Date) ===" | Out-File -FilePath $logFile -Force
+    "=== Downloads Organizer Error Log - Started $(Get-Date) ===" | Out-File -FilePath $errorLogFile -Force
+} catch {
+    Write-Warning "Failed to initialize log files: $_"
+}
+
+Write-Log "========================================" "INFO"
+Write-Log "  DOWNLOADS ORGANIZER STARTING...      " "INFO"
+Write-Log "========================================" "INFO"
 
 # Define the base Downloads folder path
 $downloadsPath = "$env:USERPROFILE\Downloads"
+Write-Log "Downloads path set to: $downloadsPath" "INFO"
 
 # Verify Downloads folder exists
 if (-not (Test-Path $downloadsPath)) {
-    Write-Host "ERROR: Downloads folder not found at $downloadsPath" -ForegroundColor Red
+    Write-ErrorLog "Downloads folder not found at $downloadsPath" "Main"
     exit 1
 }
 
-Write-Host "✓ Downloads folder found: $downloadsPath" -ForegroundColor Green
+Write-Log "✓ Downloads folder found: $downloadsPath" "SUCCESS"
 
-# Function to show Windows notification
+# Function to show Windows notification with proper error handling
 function Show-Notification($title, $message) {
     try {
-        # Create a Windows toast notification
-        Add-Type -AssemblyName Windows.Runtime
-        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
-        [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null
-        [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null
+        Write-Log "Attempting to show notification: $title - $message" "INFO"
         
-        $template = @"
+        # Try Windows 10/11 toast notification first
+        if ([System.Environment]::OSVersion.Version.Major -ge 10) {
+            try {
+                Add-Type -AssemblyName System.Runtime.WindowsRuntime -ErrorAction Stop
+                
+                # Load required WinRT types
+                $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+                $null = [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime]
+                $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+                
+                $template = @"
 <toast>
     <visual>
         <binding template="ToastGeneric">
@@ -38,20 +115,35 @@ function Show-Notification($title, $message) {
     </visual>
 </toast>
 "@
+                
+                $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+                $xml.LoadXml($template)
+                $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+                $toast.Tag = "PowerShell"
+                $toast.Group = "PowerShell"
+                $toast.ExpirationTime = [DateTimeOffset]::Now.AddMinutes(5)
+                
+                $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Downloads Organizer")
+                $notifier.Show($toast)
+                
+                Write-Log "Toast notification sent successfully" "SUCCESS"
+                return
+            } catch {
+                Write-ErrorLog "Toast notification failed: $($_.Exception.Message)" "Show-Notification" "" $_
+            }
+        }
         
-        $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-        $xml.LoadXml($template)
-        $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-        $toast.Tag = "PowerShell"
-        $toast.Group = "PowerShell"
-        $toast.ExpirationTime = [DateTimeOffset]::Now.AddMinutes(5)
-        
-        $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Downloads Organizer")
-        $notifier.Show($toast)
+        # Fallback to message box
+        try {
+            Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+            [System.Windows.Forms.MessageBox]::Show($message, $title, 'OK', 'Information') | Out-Null
+            Write-Log "Message box notification sent successfully" "SUCCESS"
+        } catch {
+            Write-ErrorLog "Message box notification failed: $($_.Exception.Message)" "Show-Notification" "" $_
+            Write-Log "All notification methods failed, continuing without notification" "WARNING"
+        }
     } catch {
-        # Fallback to simple message box if toast fails
-        Add-Type -AssemblyName System.Windows.Forms
-        [System.Windows.Forms.MessageBox]::Show($message, $title, 'OK', 'Information')
+        Write-ErrorLog "Complete notification failure: $($_.Exception.Message)" "Show-Notification" "" $_
     }
 }
 
@@ -165,7 +257,7 @@ $folderStructure = @{
     "Fonts\Legacy"            = @("fon", "fnt", "bdf", "pcf", "snf", "pfa", "pfb", "afm", "pfm")
 }
 
-Write-Host "✓ Configuration loaded: $($folderStructure.Count) categories defined" -ForegroundColor Green
+Write-Log "✓ Configuration loaded: $($folderStructure.Count) categories defined" "SUCCESS"
 
 # Files to skip (temporary and system files)
 $skipExtensions = @("tmp", "crdownload", "part", "filepart", "download", "opdownload", "!qb", "bc!", "dlm")
@@ -176,7 +268,7 @@ $enableDuplicateDetection = $true  # Enable hash-based duplicate detection
 $enableFilenameProcessing = $true  # Enable filename sanitization and dating
 $enableScheduling = $false  # Set to $true to create scheduled task
 
-Write-Host "✓ Features enabled: Duplicate detection=$enableDuplicateDetection, Filename processing=$enableFilenameProcessing" -ForegroundColor Green
+Write-Log "✓ Features enabled: Duplicate detection=$enableDuplicateDetection, Filename processing=$enableFilenameProcessing" "SUCCESS"
 
 # Hash cache for duplicate detection (file hash -> file path)
 $global:fileHashCache = @{}
@@ -185,88 +277,131 @@ $global:processedCount = 0
 
 # Special pattern-based categorization functions
 function Get-SeriesDestination($filename) {
-    # Detect TV series patterns like S01E01, S1E1, Season 1, etc.
-    if ($filename -match "S\d+E\d+|Season\s*\d+|Episode\s*\d+|s\d+e\d+") {
-        return "Video\Series"
+    try {
+        # Detect TV series patterns like S01E01, S1E1, Season 1, etc.
+        if ($filename -match "S\d+E\d+|Season\s*\d+|Episode\s*\d+|s\d+e\d+") {
+            Write-Log "Series pattern detected in: $filename" "INFO"
+            return "Video\Series"
+        }
+        return $null
+    } catch {
+        Write-ErrorLog "Error in Get-SeriesDestination: $($_.Exception.Message)" "Get-SeriesDestination" $filename $_
+        return $null
     }
-    return $null
 }
 
 function Get-ScreenshotDestination($filename) {
-    # Detect screenshot patterns
-    $screenshotPatterns = @("screenshot", "screen shot", "snip", "capture", "screencap", "screenclip")
-    foreach ($pattern in $screenshotPatterns) {
-        if ($filename -match $pattern) {
-            return "Images\Screenshots"
+    try {
+        # Detect screenshot patterns
+        $screenshotPatterns = @("screenshot", "screen shot", "snip", "capture", "screencap", "screenclip")
+        foreach ($pattern in $screenshotPatterns) {
+            if ($filename -match $pattern) {
+                Write-Log "Screenshot pattern '$pattern' detected in: $filename" "INFO"
+                return "Images\Screenshots"
+            }
         }
+        return $null
+    } catch {
+        Write-ErrorLog "Error in Get-ScreenshotDestination: $($_.Exception.Message)" "Get-ScreenshotDestination" $filename $_
+        return $null
     }
-    return $null
 }
 
 function Get-SchoolDestination($filename) {
-    # Detect school document patterns - PSET, problem set, homework
-    $schoolPatterns = @("pset", "problem set", "homework", "assignment", "lab", "midterm", "final", "exam")
-    foreach ($pattern in $schoolPatterns) {
-        if ($filename -match $pattern) {
-            return "Documents\School"
+    try {
+        # Detect school document patterns - PSET, problem set, homework
+        $schoolPatterns = @("pset", "problem set", "homework", "assignment", "lab", "midterm", "final", "exam")
+        foreach ($pattern in $schoolPatterns) {
+            if ($filename -match $pattern) {
+                Write-Log "School pattern '$pattern' detected in: $filename" "INFO"
+                return "Documents\School"
+            }
         }
+        return $null
+    } catch {
+        Write-ErrorLog "Error in Get-SchoolDestination: $($_.Exception.Message)" "Get-SchoolDestination" $filename $_
+        return $null
     }
-    return $null
 }
 
 function Get-EbookDestination($filename, $extension) {
-    # Detect ebook patterns in PDFs
-    if ($extension -eq "pdf") {
-        $ebookPatterns = @("book", "ebook", "novel", "guide", "manual", "tutorial", "handbook")
-        foreach ($pattern in $ebookPatterns) {
-            if ($filename -match $pattern) {
-                return "Documents\Ebooks"
+    try {
+        # Detect ebook patterns in PDFs
+        if ($extension -eq "pdf") {
+            $ebookPatterns = @("book", "ebook", "novel", "guide", "manual", "tutorial", "handbook")
+            foreach ($pattern in $ebookPatterns) {
+                if ($filename -match $pattern) {
+                    Write-Log "Ebook pattern '$pattern' detected in: $filename" "INFO"
+                    return "Documents\Ebooks"
+                }
             }
         }
+        return $null
+    } catch {
+        Write-ErrorLog "Error in Get-EbookDestination: $($_.Exception.Message)" "Get-EbookDestination" $filename $_
+        return $null
     }
-    return $null
 }
 
 function Get-BusinessDestination($filename, $extension) {
-    # Detect business document patterns
-    $reportPatterns = @("report", "analysis", "summary", "quarterly", "annual")
-    $proposalPatterns = @("proposal", "quote", "estimate", "bid", "contract", "agreement")
-    
-    foreach ($pattern in $reportPatterns) {
-        if ($filename -match $pattern) {
-            return "Business\Reports"
+    try {
+        # Detect business document patterns
+        $reportPatterns = @("report", "analysis", "summary", "quarterly", "annual")
+        $proposalPatterns = @("proposal", "quote", "estimate", "bid", "contract", "agreement")
+        
+        foreach ($pattern in $reportPatterns) {
+            if ($filename -match $pattern) {
+                Write-Log "Report pattern '$pattern' detected in: $filename" "INFO"
+                return "Business\Reports"
+            }
         }
-    }
-    
-    foreach ($pattern in $proposalPatterns) {
-        if ($filename -match $pattern) {
-            return "Business\Proposals"
+        
+        foreach ($pattern in $proposalPatterns) {
+            if ($filename -match $pattern) {
+                Write-Log "Proposal pattern '$pattern' detected in: $filename" "INFO"
+                return "Business\Proposals"
+            }
         }
+        
+        return $null
+    } catch {
+        Write-ErrorLog "Error in Get-BusinessDestination: $($_.Exception.Message)" "Get-BusinessDestination" $filename $_
+        return $null
     }
-    
-    return $null
 }
 
 function Get-PodcastDestination($filename) {
-    # Detect podcast patterns
-    $podcastPatterns = @("podcast", "episode", "interview", "talk", "show", "cast")
-    foreach ($pattern in $podcastPatterns) {
-        if ($filename -match $pattern) {
-            return "Audio\Podcasts"
+    try {
+        # Detect podcast patterns
+        $podcastPatterns = @("podcast", "episode", "interview", "talk", "show", "cast")
+        foreach ($pattern in $podcastPatterns) {
+            if ($filename -match $pattern) {
+                Write-Log "Podcast pattern '$pattern' detected in: $filename" "INFO"
+                return "Audio\Podcasts"
+            }
         }
+        return $null
+    } catch {
+        Write-ErrorLog "Error in Get-PodcastDestination: $($_.Exception.Message)" "Get-PodcastDestination" $filename $_
+        return $null
     }
-    return $null
 }
 
 function Get-MemeDestination($filename) {
-    # Detect meme patterns
-    $memePatterns = @("meme", "funny", "lol", "lmao", "reaction", "gif", "comic")
-    foreach ($pattern in $memePatterns) {
-        if ($filename -match $pattern) {
-            return "Images\Memes"
+    try {
+        # Detect meme patterns
+        $memePatterns = @("meme", "funny", "lol", "lmao", "reaction", "gif", "comic")
+        foreach ($pattern in $memePatterns) {
+            if ($filename -match $pattern) {
+                Write-Log "Meme pattern '$pattern' detected in: $filename" "INFO"
+                return "Images\Memes"
+            }
         }
+        return $null
+    } catch {
+        Write-ErrorLog "Error in Get-MemeDestination: $($_.Exception.Message)" "Get-MemeDestination" $filename $_
+        return $null
     }
-    return $null
 }
 
 # ADVANCED FILENAME PROCESSING FUNCTIONS
@@ -274,131 +409,199 @@ function Get-MemeDestination($filename) {
 function Get-FileHash-Fast($filePath) {
     # Fast hash calculation for duplicate detection
     try {
-        if (Test-Path $filePath) {
-            $hash = Get-FileHash -Path $filePath -Algorithm MD5 -ErrorAction Stop
-            return $hash.Hash
+        if (-not (Test-Path $filePath)) {
+            Write-Log "File not found for hashing: $filePath" "WARNING"
+            return $null
         }
-        return $null
+        
+        # Check if file is locked
+        try {
+            $fileStream = [System.IO.File]::Open($filePath, 'Open', 'Read', 'ReadWrite')
+            $fileStream.Close()
+        } catch {
+            Write-Log "File is locked or inaccessible for hashing: $filePath" "WARNING"
+            return $null
+        }
+        
+        $hash = Get-FileHash -Path $filePath -Algorithm MD5 -ErrorAction Stop
+        Write-Log "Hash calculated for: $filePath" "INFO"
+        return $hash.Hash
     } catch {
-        Write-Warning "Failed to calculate hash for: $filePath"
+        Write-ErrorLog "Failed to calculate hash for: $filePath - $($_.Exception.Message)" "Get-FileHash-Fast" $filePath $_
         return $null
     }
 }
 
 function Sanitize-Filename($filename, $extension, $destinationFolder, $creationDate) {
-    if (-not $enableFilenameProcessing) { return $filename }
-    
-    # Remove extension for processing
-    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($filename)
-    
-    # 1. Remove special characters and replace spaces with underscores
-    $cleanName = $baseName -replace '[<>:"/\\|?*]', '' -replace '\s+', '_'
-    
-    # 2. Add date suffix (MM-DD-YYYY format)
-    $dateString = $creationDate.ToString("MMM-dd-yyyy").ToUpper()
-    
-    # 3. Construct new filename with suffix
-    $newBaseName = $cleanName + "_" + $dateString
-    
-    # 4. Truncate if too long (leave room for extension)
-    $maxBaseLength = $maxFileNameLength - $extension.Length - 1
-    if ($newBaseName.Length -gt $maxBaseLength) {
-        $newBaseName = $newBaseName.Substring(0, $maxBaseLength)
-        Write-Host "    ⚠ Filename truncated: $($newBaseName.Length) chars" -ForegroundColor Yellow
+    try {
+        if (-not $enableFilenameProcessing) { 
+            Write-Log "Filename processing disabled, returning original: $filename" "INFO"
+            return $filename 
+        }
+        
+        # Remove extension for processing
+        $baseName = [System.IO.Path]::GetFileNameWithoutExtension($filename)
+        Write-Log "Processing filename: $baseName" "INFO"
+        
+        # 1. Remove special characters and replace spaces with underscores
+        $cleanName = $baseName -replace '[<>:"/\\|?*]', '' -replace '\s+', '_'
+        
+        # 2. Add date suffix (MM-DD-YYYY format)
+        $dateString = $creationDate.ToString("MMM-dd-yyyy").ToUpper()
+        
+        # 3. Construct new filename with suffix
+        $newBaseName = $cleanName + "_" + $dateString
+        
+        # 4. Truncate if too long (leave room for extension)
+        $maxBaseLength = $maxFileNameLength - $extension.Length - 1
+        if ($newBaseName.Length -gt $maxBaseLength) {
+            $newBaseName = $newBaseName.Substring(0, $maxBaseLength)
+            Write-Log "Filename truncated to $($newBaseName.Length) characters" "WARNING"
+        }
+        
+        # 5. Return complete filename with extension
+        $finalName = $newBaseName + "." + $extension
+        Write-Log "Filename processed: $filename -> $finalName" "INFO"
+        return $finalName
+    } catch {
+        Write-ErrorLog "Error sanitizing filename: $filename - $($_.Exception.Message)" "Sanitize-Filename" $filename $_
+        return $filename  # Return original filename on error
     }
-    
-    # 5. Return complete filename with extension
-    return $newBaseName + "." + $extension
 }
 
 function Test-DuplicateFile($filePath, $fileHash) {
-    if (-not $enableDuplicateDetection) { return $false }
-    
-    if ($global:fileHashCache.ContainsKey($fileHash)) {
-        $existingFile = $global:fileHashCache[$fileHash]
-        if (Test-Path $existingFile) {
-            Write-Host "    ⚠ Duplicate detected - skipping" -ForegroundColor Yellow
-            $global:duplicatesFound += @{
-                Original = $existingFile
-                Duplicate = $filePath
-                Hash = $fileHash
-            }
-            return $true
+    try {
+        if (-not $enableDuplicateDetection) { 
+            Write-Log "Duplicate detection disabled" "INFO"
+            return $false 
         }
+        
+        if (-not $fileHash) {
+            Write-Log "No hash provided for duplicate check" "INFO"
+            return $false
+        }
+        
+        if ($global:fileHashCache.ContainsKey($fileHash)) {
+            $existingFile = $global:fileHashCache[$fileHash]
+            if (Test-Path $existingFile) {
+                Write-Log "Duplicate found: $filePath matches $existingFile" "WARNING"
+                $global:duplicatesFound += @{
+                    Original = $existingFile
+                    Duplicate = $filePath
+                    Hash = $fileHash
+                }
+                return $true
+            } else {
+                Write-Log "Cached file no longer exists, removing from cache: $existingFile" "INFO"
+                $global:fileHashCache.Remove($fileHash)
+            }
+        }
+        
+        # Add to cache
+        $global:fileHashCache[$fileHash] = $filePath
+        Write-Log "File added to hash cache: $filePath" "INFO"
+        return $false
+    } catch {
+        Write-ErrorLog "Error checking for duplicates: $($_.Exception.Message)" "Test-DuplicateFile" $filePath $_
+        return $false
     }
-    
-    # Add to cache
-    $global:fileHashCache[$fileHash] = $filePath
-    return $false
 }
 
 function Create-ScheduledTask() {
-    if (-not $enableScheduling) { return }
+    if (-not $enableScheduling) { 
+        Write-Log "Scheduled task creation disabled" "INFO"
+        return 
+    }
     
     try {
         $scriptPath = $PSCommandPath
+        if (-not $scriptPath) {
+            Write-Log "Unable to determine script path for scheduled task" "WARNING"
+            return
+        }
+        
         $taskName = "Auto-Downloads-Organizer"
+        Write-Log "Creating scheduled task: $taskName" "INFO"
         
         # Check if task already exists
         $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
         if ($existingTask) {
-            Write-Host "✓ Scheduled task already exists" -ForegroundColor Green
+            Write-Log "✓ Scheduled task already exists" "SUCCESS"
             return
         }
         
         # Create daily trigger at 2 AM
-        $trigger = New-ScheduledTaskTrigger -Daily -At "02:00"
+        $trigger = New-ScheduledTaskTrigger -Daily -At "02:00" -ErrorAction Stop
         
         # Create action to run the script
-        $action = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument "-File `"$scriptPath`""
+        $action = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument "-File `"$scriptPath`"" -ErrorAction Stop
         
         # Create task settings
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ErrorAction Stop
         
         # Register the task
-        Register-ScheduledTask -TaskName $taskName -Trigger $trigger -Action $action -Settings $settings -Description "Automatically organizes Downloads folder daily" -RunLevel Highest
+        Register-ScheduledTask -TaskName $taskName -Trigger $trigger -Action $action -Settings $settings -Description "Automatically organizes Downloads folder daily" -RunLevel Highest -ErrorAction Stop
         
-        Write-Host "✓ Scheduled task created successfully" -ForegroundColor Green
+        Write-Log "✓ Scheduled task created successfully" "SUCCESS"
         
     } catch {
-        Write-Host "⚠ Error creating scheduled task: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-ErrorLog "Error creating scheduled task: $($_.Exception.Message)" "Create-ScheduledTask" "" $_
     }
 }
 
 function Get-UniqueFileName($basePath, $fileName) {
-    # ENHANCED: Overwrite duplicates instead of keeping both versions
-    # This function now simply returns the original filename to enable overwriting
-    return $fileName
+    try {
+        # ENHANCED: Overwrite duplicates instead of keeping both versions
+        # This function now simply returns the original filename to enable overwriting
+        Write-Log "Using filename (overwrite mode): $fileName" "INFO"
+        return $fileName
+    } catch {
+        Write-ErrorLog "Error in Get-UniqueFileName: $($_.Exception.Message)" "Get-UniqueFileName" $fileName $_
+        return $fileName
+    }
 }
 
 # Build reverse lookup hash table (extension -> folder path)
-Write-Host "⚙ Building extension lookup table..." -ForegroundColor Yellow
+Write-Log "⚙ Building extension lookup table..." "INFO"
 $extensionToFolder = @{}
-foreach ($folder in $folderStructure.Keys) {
-    foreach ($extension in $folderStructure[$folder]) {
-        $extensionToFolder[$extension.ToLower()] = $folder
+try {
+    foreach ($folder in $folderStructure.Keys) {
+        foreach ($extension in $folderStructure[$folder]) {
+            if ($extensionToFolder.ContainsKey($extension.ToLower())) {
+                Write-Log "Warning: Extension '$extension' mapped to multiple folders" "WARNING"
+            }
+            $extensionToFolder[$extension.ToLower()] = $folder
+        }
     }
+    Write-Log "✓ Extension lookup table built: $($extensionToFolder.Count) extensions mapped" "SUCCESS"
+} catch {
+    Write-ErrorLog "Error building extension lookup table: $($_.Exception.Message)" "Main" "" $_
+    exit 1
 }
-Write-Host "✓ Extension lookup table built: $($extensionToFolder.Count) extensions mapped" -ForegroundColor Green
 
 # Create scheduled task if enabled
 if ($enableScheduling) {
-    Write-Host "⚙ Setting up scheduled task..." -ForegroundColor Yellow
+    Write-Log "⚙ Setting up scheduled task..." "INFO"
     Create-ScheduledTask
 }
 
 # Get all files recursively in Downloads folder and subfolders (excluding hidden/system files and folders)
-Write-Host "`n⚙ Scanning Downloads folder for files..." -ForegroundColor Yellow
-$filesToProcess = Get-ChildItem -Path $downloadsPath -File -Recurse | Where-Object { 
-    -not ($_.Attributes -band [System.IO.FileAttributes]::Hidden) -and
-    -not ($_.Attributes -band [System.IO.FileAttributes]::System)
+Write-Log "`n⚙ Scanning Downloads folder for files..." "INFO"
+try {
+    $filesToProcess = Get-ChildItem -Path $downloadsPath -File -Recurse -ErrorAction Stop | Where-Object { 
+        -not ($_.Attributes -band [System.IO.FileAttributes]::Hidden) -and
+        -not ($_.Attributes -band [System.IO.FileAttributes]::System)
+    }
+    
+    $totalFiles = $filesToProcess.Count
+    Write-Log "✓ Found $totalFiles files to process" "SUCCESS"
+} catch {
+    Write-ErrorLog "Error scanning Downloads folder: $($_.Exception.Message)" "Main" "" $_
+    exit 1
 }
 
-$totalFiles = $filesToProcess.Count
-Write-Host "✓ Found $totalFiles files to process" -ForegroundColor Green
-
 if ($totalFiles -eq 0) {
-    Write-Host "`n🎉 No files to organize! Downloads folder is already clean." -ForegroundColor Green
+    Write-Log "`n🎉 No files to organize! Downloads folder is already clean." "SUCCESS"
     exit 0
 }
 
@@ -408,9 +611,9 @@ $errorCount = 0
 $duplicatesSkipped = 0
 $filesRenamed = 0
 
-Write-Host "`n========================================" -ForegroundColor Cyan
-Write-Host "  PROCESSING FILES...                   " -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
+Write-Log "`n========================================" "INFO"
+Write-Log "  PROCESSING FILES...                   " "INFO"
+Write-Log "========================================" "INFO"
 
 # Process each file with advanced pattern detection and duplicate handling
 $currentFile = 0
@@ -423,18 +626,25 @@ foreach ($file in $filesToProcess) {
         $extension = $file.Extension.TrimStart('.').ToLower()
         $filenameForPattern = $file.BaseName.ToLower()
         
-        Write-Host "[$percentComplete%] Processing: $($file.Name)" -ForegroundColor White
+        Write-Log "[$percentComplete%] Processing: $($file.Name)" "INFO"
+        
+        # Validate file still exists
+        if (-not (Test-Path $file.FullName)) {
+            Write-Log "File no longer exists, skipping: $($file.FullName)" "WARNING"
+            $skippedCount++
+            continue
+        }
         
         # Skip temporary and system files
         if ($extension -in $skipExtensions) {
-            Write-Host "    ⏭ Skipped: Temporary file" -ForegroundColor Gray
+            Write-Log "⏭ Skipped: Temporary file ($extension)" "INFO"
             $skippedCount++
             continue
         }
         
         # Skip files without extensions
         if ([string]::IsNullOrEmpty($extension)) {
-            Write-Host "    ⏭ Skipped: No extension" -ForegroundColor Gray
+            Write-Log "⏭ Skipped: No extension" "INFO"
             $skippedCount++
             continue
         }
@@ -455,7 +665,7 @@ foreach ($file in $filesToProcess) {
         # 1. Screenshots (Images) - Check filename patterns
         $destinationFolder = Get-ScreenshotDestination $filenameForPattern
         if ($destinationFolder) {
-            Write-Host "    📸 Detected: Screenshot" -ForegroundColor Cyan
+            Write-Log "📸 Detected: Screenshot" "INFO"
         }
         
         # 2. Series detection (Videos) - Check for TV series patterns
@@ -463,7 +673,7 @@ foreach ($file in $filesToProcess) {
             $seriesDestination = Get-SeriesDestination $filenameForPattern
             if ($seriesDestination -and $extension -in @("mp4", "mkv", "avi", "mov", "wmv", "mpg", "mpeg", "m4v", "rm", "rmvb", "asf", "f4v", "ogv")) {
                 $destinationFolder = $seriesDestination
-                Write-Host "    📺 Detected: TV Series" -ForegroundColor Cyan
+                Write-Log "📺 Detected: TV Series" "INFO"
             }
         }
         
@@ -471,7 +681,7 @@ foreach ($file in $filesToProcess) {
         if (-not $destinationFolder) {
             $destinationFolder = Get-SchoolDestination $filenameForPattern
             if ($destinationFolder) {
-                Write-Host "    🎓 Detected: School Document" -ForegroundColor Cyan
+                Write-Log "🎓 Detected: School Document" "INFO"
             }
         }
         
@@ -479,7 +689,7 @@ foreach ($file in $filesToProcess) {
         if (-not $destinationFolder) {
             $destinationFolder = Get-EbookDestination $filenameForPattern $extension
             if ($destinationFolder) {
-                Write-Host "    📚 Detected: Ebook" -ForegroundColor Cyan
+                Write-Log "📚 Detected: Ebook" "INFO"
             }
         }
         
@@ -487,7 +697,7 @@ foreach ($file in $filesToProcess) {
         if (-not $destinationFolder) {
             $destinationFolder = Get-BusinessDestination $filenameForPattern $extension
             if ($destinationFolder) {
-                Write-Host "    💼 Detected: Business Document" -ForegroundColor Cyan
+                Write-Log "💼 Detected: Business Document" "INFO"
             }
         }
         
@@ -496,7 +706,7 @@ foreach ($file in $filesToProcess) {
             $podcastDestination = Get-PodcastDestination $filenameForPattern
             if ($podcastDestination -and $extension -in @("mp3", "flac", "wav", "aac", "ogg", "m4a", "wma", "opus", "ape", "mpc", "tta", "wv", "dsd", "dsf", "dff")) {
                 $destinationFolder = $podcastDestination
-                Write-Host "    🎙 Detected: Podcast" -ForegroundColor Cyan
+                Write-Log "🎙 Detected: Podcast" "INFO"
             }
         }
         
@@ -505,7 +715,7 @@ foreach ($file in $filesToProcess) {
             $memeDestination = Get-MemeDestination $filenameForPattern
             if ($memeDestination -and $extension -in @("jpg", "jpeg", "png", "gif", "bmp", "tif", "tiff", "webp", "heic", "avif", "jfif", "pjpeg", "pjp")) {
                 $destinationFolder = $memeDestination
-                Write-Host "    😂 Detected: Meme" -ForegroundColor Cyan
+                Write-Log "😂 Detected: Meme" "INFO"
             }
         }
         
@@ -513,10 +723,10 @@ foreach ($file in $filesToProcess) {
         if (-not $destinationFolder) {
             if ($extensionToFolder.ContainsKey($extension)) {
                 $destinationFolder = $extensionToFolder[$extension]
-                Write-Host "    📁 Categorized by extension: .$extension" -ForegroundColor Gray
+                Write-Log "📁 Categorized by extension: .$extension -> $destinationFolder" "INFO"
             } else {
                 $destinationFolder = "Misc"
-                Write-Host "    ❓ Moved to Misc: Unknown type" -ForegroundColor Gray
+                Write-Log "❓ Moved to Misc: Unknown type (.$extension)" "INFO"
             }
         }
         
@@ -525,15 +735,21 @@ foreach ($file in $filesToProcess) {
         
         # Check if file is already in the correct location
         if ($file.DirectoryName -eq $destinationPath) {
-            Write-Host "    ✓ Already in correct location" -ForegroundColor Green
+            Write-Log "✓ Already in correct location: $destinationFolder" "SUCCESS"
             $skippedCount++
             continue
         }
         
         # Create destination folder only if it doesn't exist (on-demand folder creation)
         if (-not (Test-Path $destinationPath)) {
-            New-Item -Path $destinationPath -ItemType Directory -Force | Out-Null
-            Write-Host "    📂 Created folder: $destinationFolder" -ForegroundColor Green
+            try {
+                New-Item -Path $destinationPath -ItemType Directory -Force -ErrorAction Stop | Out-Null
+                Write-Log "📂 Created folder: $destinationFolder" "SUCCESS"
+            } catch {
+                Write-ErrorLog "Failed to create destination folder: $destinationPath - $($_.Exception.Message)" "Main" $file.FullName $_
+                $errorCount++
+                continue
+            }
         }
         
         # ADVANCED: Process filename with sanitization, dating, and truncation
@@ -541,7 +757,7 @@ foreach ($file in $filesToProcess) {
         $processedFileName = Sanitize-Filename $file.Name $extension $destinationFolder $file.CreationTime
         
         if ($processedFileName -ne $originalFileName) {
-            Write-Host "    ✏ Renamed: $processedFileName" -ForegroundColor Magenta
+            Write-Log "✏ Renamed: $originalFileName -> $processedFileName" "INFO"
             $filesRenamed++
         }
         
@@ -550,26 +766,38 @@ foreach ($file in $filesToProcess) {
         
         # Validate source file still exists before moving
         if (-not (Test-Path $file.FullName)) {
-            Write-Warning "Source file no longer exists: $($file.FullName)"
+            Write-Log "Source file no longer exists: $($file.FullName)" "WARNING"
             $errorCount++
             continue
         }
         
+        # Check if destination file exists and if source and destination are the same
+        if ((Test-Path $destinationFile) -and ((Get-Item $file.FullName).FullName -eq (Get-Item $destinationFile).FullName)) {
+            Write-Log "Source and destination are the same file, skipping: $($file.FullName)" "WARNING"
+            $skippedCount++
+            continue
+        }
+        
         # Move the file to destination (with overwrite and new processed name)
-        Move-Item -Path $file.FullName -Destination $destinationFile -Force
-        Write-Host "    ➡ Moved to: $destinationFolder" -ForegroundColor Green
-        $movedCount++
-        $global:processedCount++
+        try {
+            Move-Item -Path $file.FullName -Destination $destinationFile -Force -ErrorAction Stop
+            Write-Log "➡ Successfully moved to: $destinationFolder" "SUCCESS"
+            $movedCount++
+            $global:processedCount++
+        } catch {
+            Write-ErrorLog "Failed to move file: $($file.FullName) -> $destinationFile - $($_.Exception.Message)" "Main" $file.FullName $_
+            $errorCount++
+        }
         
     } catch {
-        Write-Host "    ❌ Error: $($_.Exception.Message)" -ForegroundColor Red
+        Write-ErrorLog "Unexpected error processing file: $($file.FullName) - $($_.Exception.Message)" "Main" $file.FullName $_
         $errorCount++
     }
 }
 
-Write-Host "`n========================================" -ForegroundColor Cyan
-Write-Host "  ORGANIZATION COMPLETE!                " -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
+Write-Log "`n========================================" "INFO"
+Write-Log "  ORGANIZATION COMPLETE!                " "INFO"
+Write-Log "========================================" "INFO"
 
 # Generate completion summary for notification and console
 $summary = @"
@@ -581,41 +809,60 @@ Files processed: $totalFiles
 • ❌ Errors: $errorCount files
 "@
 
-Write-Host $summary -ForegroundColor White
+Write-Log $summary "INFO"
 
 # Show completion status
 if ($movedCount -gt 0) {
-    Write-Host "`n🎉 SUCCESS: Downloads folder has been organized!" -ForegroundColor Green
+    Write-Log "`n🎉 SUCCESS: Downloads folder has been organized!" "SUCCESS"
 } else {
-    Write-Host "`n✨ INFO: No files needed to be moved." -ForegroundColor Cyan
+    Write-Log "`n✨ INFO: No files needed to be moved." "INFO"
 }
 
 if ($duplicatesSkipped -gt 0) {
-    Write-Host "💡 TIP: $duplicatesSkipped duplicate files were found and skipped." -ForegroundColor Yellow
+    Write-Log "💡 TIP: $duplicatesSkipped duplicate files were found and skipped." "WARNING"
 }
 
 if ($errorCount -gt 0) {
-    Write-Host "⚠ WARNING: $errorCount files had errors during processing." -ForegroundColor Yellow
+    Write-Log "⚠ WARNING: $errorCount files had errors during processing." "WARNING"
 }
 
 # Category breakdown
-Write-Host "`n📊 CATEGORY BREAKDOWN:" -ForegroundColor Cyan
-$categoryStats = @{}
-Get-ChildItem -Path $downloadsPath -Directory | ForEach-Object {
-    $fileCount = (Get-ChildItem -Path $_.FullName -File -Recurse).Count
-    if ($fileCount -gt 0) {
-        $categoryStats[$_.Name] = $fileCount
+Write-Log "`n📊 CATEGORY BREAKDOWN:" "INFO"
+try {
+    $categoryStats = @{}
+    Get-ChildItem -Path $downloadsPath -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        try {
+            $fileCount = (Get-ChildItem -Path $_.FullName -File -Recurse -ErrorAction SilentlyContinue).Count
+            if ($fileCount -gt 0) {
+                $categoryStats[$_.Name] = $fileCount
+                Write-Log "   $($_.Name): $fileCount files" "INFO"
+            }
+        } catch {
+            Write-ErrorLog "Error counting files in category: $($_.Name) - $($_.Exception.Message)" "Main" "" $_
+        }
     }
+} catch {
+    Write-ErrorLog "Error generating category breakdown: $($_.Exception.Message)" "Main" "" $_
 }
 
-$categoryStats.GetEnumerator() | Sort-Object Value -Descending | ForEach-Object {
-    Write-Host "   $($_.Key): $($_.Value) files" -ForegroundColor White
-}
-
-Write-Host "`n✨ Organization complete! Press any key to exit..." -ForegroundColor Green
+Write-Log "`n✨ Organization complete! Press any key to exit..." "SUCCESS"
+Write-Log "Debug logs saved to: $logFile" "INFO"
+Write-Log "Error logs saved to: $errorLogFile" "INFO"
 
 # Show notification
-Show-Notification "Downloads Organizer" $summary
+try {
+    Show-Notification "Downloads Organizer" $summary
+} catch {
+    Write-ErrorLog "Failed to show final notification: $($_.Exception.Message)" "Main" "" $_
+}
+
+# Finalize logs
+try {
+    "=== Downloads Organizer Completed $(Get-Date) ===" | Add-Content -Path $logFile
+    "=== Downloads Organizer Completed $(Get-Date) ===" | Add-Content -Path $errorLogFile
+} catch {
+    Write-Warning "Failed to finalize log files: $_"
+}
 
 # Wait for user input before closing
 Read-Host
