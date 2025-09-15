@@ -1,9 +1,19 @@
 @echo off
-set "ps1url=https://raw.githubusercontent.com/09sychic/xds3/refs/heads/main/sort.ps1"
-set "ps1file=%temp%\sort.ps1"
+setlocal
 
-REM Elevate and run PS1
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-"Start-Process PowerShell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"Invoke-WebRequest -UseBasicParsing %ps1url% -OutFile %ps1file%; & %ps1file%; Remove-Item %ps1file%\"'"
+REM Name of the file you want to run (same directory as this BAT)
+set "target=sort.ps1"
 
-exit /b
+REM Get current directory
+set "curdir=%~dp0"
+
+REM Run the file with PowerShell, capture errors
+powershell -NoProfile -ExecutionPolicy Bypass -File "%curdir%%target%" 2>"%curdir%error.log"
+
+REM Check if error log has content
+for %%A in ("%curdir%error.log") do (
+    if %%~zA EQU 0 del "%curdir%error.log"
+)
+
+endlocal
+pause
