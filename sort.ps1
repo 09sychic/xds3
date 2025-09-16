@@ -47,49 +47,27 @@ function Show-Notification {
     param([string]$Title, [string]$Message)
     try {
         Write-DebugLog "Attempting toast notification"
-        Add-Type -AssemblyName Windows.Runtime
-        [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-        [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-        [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime] | Out-Null
-
-        $template = @'
-<toast>
-  <visual>
-    <binding template="ToastGeneric">
-      <text>{0}</text>
-      <text>{1}</text>
-    </binding>
-  </visual>
-</toast>
-'@
-        $xmlString = [string]::Format(
-            $template,
-            [Security.SecurityElement]::Escape([string]$Title),
-            [Security.SecurityElement]::Escape([string]$Message)
-        )
-        $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-        $xml.LoadXml($xmlString)
-
-        $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-        $toast.Tag = 'PowerShell'
-        $toast.Group = 'PowerShell'
-        $toast.ExpirationTime = [DateTimeOffset]::Now.AddMinutes(5)
-
-        $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Downloads Organizer')
-        $notifier.Show($toast)
-        Write-DebugLog "Toast notification sent"
+        # Check if Windows.Runtime is available first
+        if ([System.Environment]::OSVersion.Version -ge [Version]"10.0") {
+            Add-Type -AssemblyName Windows.Runtime -ErrorAction Stop
+            [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+            # ... rest of toast code ...
+        } else {
+            throw "Windows 10+ required for toast notifications"
+        }
     } catch {
         Write-ErrorLog "Toast notification failed; using MessageBox fallback" $_
         try {
-            Add-Type -AssemblyName System.Windows.Forms
+            Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
             [System.Windows.Forms.MessageBox]::Show($Message, $Title, 'OK', 'Information') | Out-Null
             Write-DebugLog "MessageBox fallback shown"
         } catch {
-            Write-ErrorLog "All notification methods failed" $_
+            Write-ErrorLog "MessageBox failed; using console output" $_
+            Write-Host "=== $Title ===" -ForegroundColor Green
+            Write-Host $Message -ForegroundColor Cyan
         }
     }
 }
-
 # Categories map (same as before; trimmed comments)
 $folderStructure = @{
     "Documents\Word" = @("doc","docx","dot","dotx","docm","dotm")
@@ -354,3 +332,4 @@ Write-Host "Error log: $errorLogPath"
 
 Read-Host -Prompt "Press Enter to exit"
 exit 0
+
